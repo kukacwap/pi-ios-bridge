@@ -190,6 +190,17 @@ struct TurnView: View {
                 if !turn.text.isEmpty {
                     Text(turn.text).textSelection(.enabled)
                 }
+                // Issue #2: inline error note instead of an artifact panel entry.
+                if let err = turn.toolError {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(err).font(.caption)
+                    }
+                    .foregroundStyle(.red)
+                    .padding(8)
+                    .background(Color.red.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
                 // Inline images from the assistant message (phase 2).
                 ForEach(Array(turn.blocks.enumerated()), id: \.offset) { _, block in
                     if case .image(let data, _) = block, let ui = UIImage(data: data) {

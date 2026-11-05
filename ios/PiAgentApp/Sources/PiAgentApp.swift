@@ -17,6 +17,7 @@ struct RootView: View {
     @StateObject private var model: ChatModel
     @State private var showSettings = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var hSize
 
     init() {
         // ChatModel needs settings; construct a throwaway here and rebind in onAppear.
@@ -24,15 +25,27 @@ struct RootView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ChatView()
-                .environmentObject(model)
-                .navigationTitle("Pi (local)")
-                .toolbar { toolbar }
-                .sheet(isPresented: $showSettings) {
-                    SettingsView(onSave: reconnect)
+        Group {
+            if hSize == .regular {
+                // iPad / large Mac window: native sidebar with sessions + settings.
+                NavigationSplitView {
+                    SidebarView(model: model,
+                                onOpenSettings: { showSettings = true },
+                                onNewSession: { model.newSession() })
                         .environmentObject(settings)
+                } detail: {
+                    chatDetail
                 }
+            } else {
+                // iPhone (compact): single-column stack with sheets.
+                NavigationStack {
+                    chatContent
+                }
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(onSave: reconnect)
+                .environmentObject(settings)
         }
         .onAppear {
             if settings.isConfigured { model.connect() } else { showSettings = true }
@@ -47,6 +60,21 @@ struct RootView: View {
                     model.connect()
                 }
             }
+        }
+    }
+
+    // The chat column, shared by both layouts.
+    private var chatContent: some View {
+        ChatView()
+            .environmentObject(model)
+            .navigationTitle("Pi (local)")
+            .toolbar { toolbar }
+    }
+
+    // iPad detail: wrap the chat in its own navigation stack so it has a toolbar.
+    private var chatDetail: some View {
+        NavigationStack {
+            chatContent
         }
     }
 
