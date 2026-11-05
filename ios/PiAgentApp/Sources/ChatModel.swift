@@ -12,6 +12,7 @@ final class ChatModel: ObservableObject {
         var blocks: [MessageBlock] = []
         var streaming: Bool = false
         var tools: [String] = []          // tool names used in this turn
+        var toolError: String? = nil      // issue #2: inline error note (not an artifact)
 
         var text: String {
             blocks.compactMap { block in
@@ -66,6 +67,10 @@ final class ChatModel: ObservableObject {
 
     private var client: PiAgentClient?
     private var settings: AppSettings
+    /// Only apply a get_messages batch to the transcript when we explicitly
+    /// requested it (connect / switch / new). Stray or broadcast .history events
+    /// must NOT clobber a live conversation.
+    private var pendingHistoryLoad = false
 
     init(settings: AppSettings) { self.settings = settings }
 
@@ -187,6 +192,7 @@ final class ChatModel: ObservableObject {
             connected = true
             currentModel = model
             statusLine = "connected · \(provider)/\(model)"
+            pendingHistoryLoad = true          // we explicitly want history now
             client?.getMessages()      // load history (phase 1)
             client?.listSessions()     // populate session browser
             client?.getAvailableModels()
@@ -216,8 +222,10 @@ final class ChatModel: ObservableObject {
             }
 
         case .toolEnd(let name, let isError, let resultText):
-            if isError && !resultText.isEmpty {
-                artifacts.append(Artifact(kind: .text, title: "\(name) (error)", content: resultText))
+            // Issue #2: don't clutter the Artifacts panel with tool errors.
+            // Surface them inline on the turn instead (small red note).
+            if isError, let i = assistantIndex, !resultText.isEmpty {
+                turns[i].toolError = "\(name): \(resultText.prefix(300))"
             }
 
         case .image(let data, let mimeType):
@@ -248,7 +256,11 @@ final class ChatModel: ObservableObject {
             }
 
         case .history(let messages):
-            // get_messages batch -> replace the transcript with the session history.
+            // Issue #1: only replace the transcript when we explicitly asked for
+            // history AND nothing is actively streaming. Otherwise a stray or
+            // broadcast get_messages would wipe a live conversation.
+            guard pendingHistoryLoad, !running else { return }
+            pendingHistoryLoad = false
             var newTurns: [Turn] = []
             for m in messages {
                 guard !m.blocks.isEmpty else { continue }
@@ -287,9 +299,11 @@ final class ChatModel: ObservableObject {
                 parseSessions(data)
             case "switch_session":
                 // After switching, reload the new session's history.
+                pendingHistoryLoad = true
                 client?.getMessages()
             case "new_session":
                 turns.removeAll(); artifacts.removeAll()
+                pendingHistoryLoad = true
                 client?.getMessages()
             case "diff":
                 if let out = data["output"] as? String, !out.isEmpty {
