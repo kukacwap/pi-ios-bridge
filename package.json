@@ -1,0 +1,17 @@
+{
+  "name": "pi-ios-bridge",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "type": "module",
+  "bin": { "pi-ios-bridge": "server.js" },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.22.1"
+  }
+}

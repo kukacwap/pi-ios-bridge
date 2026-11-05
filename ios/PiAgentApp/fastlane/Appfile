@@ -1,0 +1,7 @@
+# Values are read from environment variables so no secrets live in the repo.
+# Set: BUNDLE_ID, DEVELOPMENT_TEAM (see fastlane/README or ios/SUBMIT.md).
+app_identifier(ENV["BUNDLE_ID"])
+team_id(ENV["DEVELOPMENT_TEAM"])
+
+# Apple ID is optional when using an App Store Connect API key (recommended).
+apple_id(ENV["APPLE_ID"]) if ENV["APPLE_ID"]

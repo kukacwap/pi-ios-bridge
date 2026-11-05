@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TestFlight / App Store distribution -->
+    <key>method</key>
+    <string>app-store-connect</string>
+
+    <!-- Upload straight to App Store Connect after export -->
+    <key>destination</key>
+    <string>upload</string>
+
+    <!-- Let Xcode manage signing with your automatic provisioning -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!-- Replace with your 10-character Team ID (or let the script inject it) -->
+    <key>teamID</key>
+    <string>__DEVELOPMENT_TEAM__</string>
+
+    <key>uploadSymbols</key>
+    <true/>
+
+    <key>manageAppVersionAndBuildNumber</key>
+    <true/>
+</dict>
+</plist>
