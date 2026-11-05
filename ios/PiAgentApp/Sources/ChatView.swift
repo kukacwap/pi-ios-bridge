@@ -172,13 +172,12 @@ struct TurnView: View {
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
-                if showThinking && !turn.thinking.isEmpty {
-                    Text(turn.thinking)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(8)
-                        .background(Color.secondary.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                // Reasoning is ALWAYS available as a collapsible block so a
+                // thinking-only turn (no final text) is never rendered blank.
+                // Auto-expand when there's no other visible content for the turn.
+                if !turn.thinking.isEmpty {
+                    ReasoningBlock(text: turn.thinking,
+                                   defaultExpanded: showThinking || turn.text.isEmpty)
                 }
                 if !turn.tools.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -209,8 +208,14 @@ struct TurnView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                 }
-                if turn.text.isEmpty && turn.tools.isEmpty && turn.streaming {
+                // While streaming and nothing visible yet: spinner.
+                if turn.text.isEmpty && turn.thinking.isEmpty && turn.tools.isEmpty && turn.streaming {
                     ProgressView().controlSize(.small)
+                }
+                // A finished turn that produced nothing visible: show a marker
+                // so the conversation flow is never broken by a blank bubble.
+                if !turn.streaming && turn.text.isEmpty && turn.thinking.isEmpty && turn.tools.isEmpty {
+                    Text("(no output)").font(.caption).italic().foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -234,6 +239,47 @@ struct ToolBadge: View {
         case "read": return "doc.text"
         case "write", "edit": return "pencil"
         default: return "wrench.and.screwdriver"
+        }
+    }
+}
+
+// MARK: - Collapsible reasoning (thinking) block
+
+/// Always-available collapsible reasoning. Ensures a thinking-only assistant turn
+/// (no final text) is never rendered as a blank bubble.
+struct ReasoningBlock: View {
+    let text: String
+    @State private var expanded: Bool
+
+    init(text: String, defaultExpanded: Bool) {
+        self.text = text
+        _expanded = State(initialValue: defaultExpanded)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "brain")
+                        .font(.caption2)
+                    Text(expanded ? "Reasoning" : "reasoning (tap to expand)")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
         }
     }
 }
