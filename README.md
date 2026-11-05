@@ -18,9 +18,40 @@ JSONL protocol over an authenticated WebSocket. The Swift app is a thin client.
 ## Prerequisites
 
 - `pi` installed (`which pi`) and the `ollama` provider configured in
-  `~/.pi/agent/models.json` (already done: `qwen3-coder:latest`, `qwen3.8:27b-mlx`).
+  `~/.pi/agent/models.json` (already done: `qwen3-coder:latest`, `qwen3.8:27b-mlx`,
+  `flint:latest`).
 - Ollama running: `ollama serve` (and the model pulled).
 - Node 18+ (bundled pi node is v22).
+
+## Adding a local model to the rotatable list
+
+The app's model switcher is populated by pi's `get_available_models`, which reads
+`~/.pi/agent/models.json`. It does **not** auto-discover Ollama's library, so any
+model you want to rotate to must be listed there under the `ollama` provider.
+
+1. Pull it with Ollama:  `ollama pull flint`
+2. Add an entry to the `ollama.models` array in `~/.pi/agent/models.json`:
+   ```json
+   {
+     "id": "flint:latest",
+     "name": "Flint (local)",
+     "reasoning": false,
+     "input": ["text"],
+     "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+     "contextWindow": 262144,
+     "maxTokens": 8192
+   }
+   ```
+   - `reasoning`: `true` only for thinking-capable models (qwen3-coder); `false`
+     otherwise. `input`: `["text"]` or `["text","image"]` for vision.
+   - Get context/params from `ollama.com/library/<model>` or
+     `curl localhost:11434/api/show -d '{"name":"<model>"}'`.
+3. Restart the bridge so pi reloads the config:
+   ```bash
+   cd ~/pi-ios-bridge && ./service.sh restart
+   ```
+4. The model now appears in the app's switcher on next connect (the app keeps
+   only local providers: `ollama`, `llama-cpp`, `lmstudio`, `vllm`).
 
 ## Run the bridge
 
