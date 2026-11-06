@@ -374,10 +374,15 @@ final class ChatModel: ObservableObject {
             case "get_available_thinking_levels":
                 if let levels = data["levels"] as? [String] { thinkingLevels = levels }
             case "get_session_stats":
-                if let cu = data["contextUsage"] as? [String: Any], let pct = cu["percent"] as? Int {
-                    contextPercent = pct
-                    // improvement #11: auto-compact when context usage exceeds 70%
-                    if pct > 70 { doCompact() }
+                if let cu = data["contextUsage"] as? [String: Any], let rawPct = cu["percent"] {
+                    var pct: Int? = nil
+                    if let i = rawPct as? Int { pct = i }
+                    else if let d = rawPct as? Double { pct = Int(d) }
+                    if let pct = pct {
+                        contextPercent = pct
+                        // improvement #11: auto-compact when context usage exceeds 70%
+                        if pct > 70 { doCompact() }
+                    }
                 }
             default:
                 break
@@ -390,6 +395,10 @@ final class ChatModel: ObservableObject {
             // session_info_changed arrives as a raw event.
             if obj["type"] as? String == "session_info_changed", let name = obj["name"] as? String {
                 sessionName = name
+            }
+            // thinking_level_changed arrives as a raw event.
+            if obj["type"] as? String == "thinking_level_changed", let level = obj["level"] as? String {
+                currentThinkingLevel = level
             }
         }
     }

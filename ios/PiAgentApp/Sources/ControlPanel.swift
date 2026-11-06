@@ -12,7 +12,7 @@ struct ControlPanel: View {
                 // Step 1 — session naming
                 Section("Session") {
                     TextField("Name this session", text: $nameText,
-                              onCommit: { if !nameText.trimmingCharacters(in: .whitespaces).isEmpty { model.nameSession(nameText) } })
+                              onCommit: { if !nameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.nameSession(nameText) } })
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     if !model.sessionName.isEmpty {

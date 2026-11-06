@@ -123,7 +123,7 @@ struct BashPanel: View {
                     } else {
                         Button(action: run) {
                             Image(systemName: "play.fill").font(.title2)
-                        }.disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }.disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
                 .padding(8)

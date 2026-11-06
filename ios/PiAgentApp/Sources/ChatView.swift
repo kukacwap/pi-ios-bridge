@@ -168,7 +168,7 @@ struct ChatView: View {
             Button(action: sendTapped) {
                 Image(systemName: "arrow.up.circle.fill").font(.title2)
             }
-            .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty || !model.connected)
+            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.connected)
         }
         .padding(8)
     }
