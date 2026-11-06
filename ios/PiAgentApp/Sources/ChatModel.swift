@@ -265,6 +265,9 @@ final class ChatModel: ObservableObject {
 
         case .messageEnd(let role, let blocks):
             // Replace the streaming assistant turn with the authoritative one.
+            // NOTE: user turns are appended by `send` (live) or by the `.history`
+            // handler (session load) — we must NOT append a user turn here again,
+            // otherwise every prompt duplicates the user message.
             if role == "assistant" {
                 if let i = assistantIndex {
                     turns[i].blocks = blocks
@@ -278,14 +281,8 @@ final class ChatModel: ObservableObject {
                         artifacts.append(Artifact(kind: .image, title: "image", content: "", imageData: data, mimeType: mime))
                     }
                 }
-            } else if role == "user" {
-                // History load: append past user turns.
-                if !blocks.isEmpty {
-                    var t = Turn(role: .user, blocks: blocks)
-                    t.streaming = false
-                    turns.append(t)
-                }
             }
+            // (user turns are handled by send() / .history — no append here)
 
         case .history(let messages):
             // Issue #1: only replace the transcript when we explicitly asked for
