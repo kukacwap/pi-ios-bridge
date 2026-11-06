@@ -12,9 +12,17 @@ struct SidebarView: View {
         List {
             // Session search (improvement #4)
             Section {
-                TextField("Search sessions…", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .searchSuggestions {
+                HStack {
+                    TextField("Search sessions…", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .searchSuggestions {
                         ForEach(filteredSessions, id: \.id) { s in
                             Text(s.name).foregroundStyle(.secondary)
                         }

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// Observable chat state driven by PiAgentClient events.
 @MainActor
@@ -107,6 +108,8 @@ final class ChatModel: ObservableObject {
     func send(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, connected else { return }
+        // improvement #9: haptic feedback on send
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         turns.append(Turn(role: .user, blocks: [.text(t)]))
         turns.append(Turn(role: .assistant, streaming: true))
         running = true
@@ -121,6 +124,13 @@ final class ChatModel: ObservableObject {
         // Drop the user turn + assistant response, then re-run the same prompt.
         turns.removeSubrange(lastUserIdx...turns.count - 1)
         send(text)
+    }
+
+    // Clear conversation / restart session (improvement #5).
+    func clearConversation() {
+        client?.newSession()
+        turns.removeAll()
+        artifacts.removeAll()
     }
 
     func steer(_ text: String) {

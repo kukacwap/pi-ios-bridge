@@ -71,6 +71,12 @@ struct ChatView: View {
                     .disabled(model.running)
             }
 
+            // Clear conversation / restart session (improvement #5)
+            if !model.turns.isEmpty {
+                Button { model.clearConversation() } label: { Image(systemName: "trash") }
+                    .disabled(model.running)
+            }
+
             // Phase 1 + step 4: sessions & fork
             Menu {
                 Button("Browse sessions", systemImage: "folder") { showSessions = true }
@@ -103,6 +109,11 @@ struct ChatView: View {
                 .padding()
             }
             .onChange(of: model.turns.last?.text) { _, _ in
+                if let last = model.turns.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+            }
+            // improvement #8: scroll to bottom whenever the transcript changes
+            // (e.g. after loading a session history) so the latest turn is visible.
+            .onChange(of: model.turns.count) { _, _ in
                 if let last = model.turns.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
@@ -201,8 +212,11 @@ struct TurnView: View {
                     Text(turn.text)
                         .textSelection(.enabled)
                     // improvement #2: copy response (via UIPasteboard — reliable across OS versions)
+                    // improvement #6: copy full block (thinking + text combined)
                     Button {
-                        UIPasteboard.general.string = turn.text
+                        var full = turn.text
+                        if !turn.thinking.isEmpty { full = turn.thinking + "\n\n" + turn.text }
+                        UIPasteboard.general.string = full
                     } label: {
                         Image(systemName: "doc.on.doc")
                             .font(.caption2)
