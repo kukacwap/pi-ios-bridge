@@ -144,10 +144,16 @@ final class ChatModel: ObservableObject {
     func abort() { client?.abort(); running = false }
 
     // Phase 1
-    func newSession() { client?.newSession(); turns.removeAll(); artifacts.removeAll() }
+    func newSession() {
+        pendingHistoryLoad = true
+        client?.newSession()
+        turns.removeAll()
+        artifacts.removeAll()
+    }
     func browseSessions() { client?.listSessions() }
     func openSession(_ s: SessionInfo) {
         turns.removeAll()
+        pendingHistoryLoad = true   // ensure history reloads after switching
         client?.switchSession(s.path)
         statusLine = "loading \(s.name)…"
     }
