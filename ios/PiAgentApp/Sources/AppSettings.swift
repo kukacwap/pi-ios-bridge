@@ -73,10 +73,10 @@ final class AppSettings: ObservableObject {
     }
 
     private func applyNonEmpty(_ c: BridgeConfig) {
-        if !c.host.trimmingCharacters(in: .whitespaces).isEmpty { host = c.host }
+        if !c.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { host = c.host }
         if c.port > 0 { port = c.port }
         useTLS = c.useTLS
-        if !c.token.trimmingCharacters(in: .whitespaces).isEmpty { token = c.token }
+        if !c.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { token = c.token }
     }
 }
 
