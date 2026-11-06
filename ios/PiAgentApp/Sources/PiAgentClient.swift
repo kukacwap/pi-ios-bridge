@@ -24,12 +24,13 @@ final class PiAgentClient: NSObject {
         case toolStart(name: String, args: [String: Any])
         case toolEnd(name: String, isError: Bool, resultText: String)
         case image(data: Data, mimeType: String)
+        case messageStart(role: String)
         case messageEnd(role: String, blocks: [MessageBlock])   // authoritative completed message
-        case settled
+        case settled(aborted: Bool)
         case agentEnd
         case bashUpdate(id: String, delta: String)   // step 6: live bash output
-        case history([HistoryMessage])                  // get_messages batch -> turns
-        case response(command: String, success: Bool, data: [String: Any])
+        case history(id: String, messages: [HistoryMessage])   // get_messages batch -> turns
+        case response(command: String, id: String, success: Bool, error: String?, data: [String: Any])
         case extensionUI(ExtensionUIDialog)                      // ask-style clarification
         case bridgeError(String)
         case raw([String: Any])
@@ -67,31 +68,40 @@ final class PiAgentClient: NSObject {
 
     // MARK: - Commands
 
-    private func send(_ obj: [String: Any]) {
+    /// Sends one command and returns its request id, so callers can match the
+    /// response (the bridge is shared, so not every response is ours).
+    @discardableResult
+    private func send(_ obj: [String: Any]) -> String {
+        var obj = obj
+        let id = (obj["id"] as? String) ?? UUID().uuidString
+        obj["id"] = id
         guard let task = task,
               let data = try? JSONSerialization.data(withJSONObject: obj),
-              let str = String(data: data, encoding: .utf8) else { return }
+              let str = String(data: data, encoding: .utf8) else { return id }
         task.send(.string(str)) { err in
             if let err = err { self.onEvent?(.bridgeError("send failed: \(err.localizedDescription)")) }
         }
+        return id
     }
 
-    func prompt(_ message: String, behavior: String? = nil) {
+    @discardableResult
+    func prompt(_ message: String, behavior: String? = nil) -> String {
         var obj: [String: Any] = ["type": "prompt", "message": message, "id": UUID().uuidString]
         if let b = behavior { obj["streamingBehavior"] = b }
-        send(obj)
+        return send(obj)
     }
     func steer(_ message: String) { send(["type": "steer", "message": message, "id": UUID().uuidString]) }
     func followUp(_ message: String) { send(["type": "follow_up", "message": message, "id": UUID().uuidString]) }
     func abort() { send(["type": "abort", "id": UUID().uuidString]) }
 
     // Phase 1: history + session management
-    func getMessages() { send(["type": "get_messages", "id": "gm-\(UUID().uuidString)"]) }
+    @discardableResult func getMessages() -> String { send(["type": "get_messages", "id": "gm-\(UUID().uuidString)"]) }
+    @discardableResult func getState() -> String { send(["type": "get_state", "id": "st-\(UUID().uuidString)"]) }
     func listSessions() { send(["type": "list_sessions", "id": "ls-\(UUID().uuidString)"]) }
-    func newSession() { send(["type": "new_session", "id": UUID().uuidString]) }
-    func switchSession(_ path: String) { send(["type": "switch_session", "sessionPath": path, "id": UUID().uuidString]) }
-    func fork(entryId: String) { send(["type": "fork", "entryId": entryId, "id": UUID().uuidString]) }
-    func clone() { send(["type": "clone", "id": UUID().uuidString]) }
+    @discardableResult func newSession() -> String { send(["type": "new_session", "id": UUID().uuidString]) }
+    @discardableResult func switchSession(_ path: String) -> String { send(["type": "switch_session", "sessionPath": path, "id": UUID().uuidString]) }
+    @discardableResult func fork(entryId: String) -> String { send(["type": "fork", "entryId": entryId, "id": UUID().uuidString]) }
+    @discardableResult func clone() -> String { send(["type": "clone", "id": UUID().uuidString]) }
     func getForkMessages() { send(["type": "get_fork_messages", "id": UUID().uuidString]) }
     func setSessionName(_ name: String) { send(["type": "set_session_name", "name": name, "id": UUID().uuidString]) }
 
@@ -106,7 +116,7 @@ final class PiAgentClient: NSObject {
     func getAvailableThinkingLevels() { send(["type": "get_available_thinking_levels", "id": UUID().uuidString]) }
 
     // Context / compaction (step 3)
-    func getStats() { send(["type": "get_session_stats", "id": "stats-\(UUID().uuidString)"]) }
+    @discardableResult func getStats() -> String { send(["type": "get_session_stats", "id": "stats-\(UUID().uuidString)"]) }
     func compact(customInstructions: String? = nil) {
         var obj: [String: Any] = ["type": "compact", "id": UUID().uuidString]
         if let ci = customInstructions { obj["customInstructions"] = ci }
@@ -193,6 +203,11 @@ final class PiAgentClient: NSObject {
             let resultText = extractText(obj["result"])
             onEvent?(.toolEnd(name: name, isError: isError, resultText: resultText))
 
+        case "message_start":
+            if let msg = obj["message"] as? [String: Any] {
+                onEvent?(.messageStart(role: msg["role"] as? String ?? "assistant"))
+            }
+
         case "message_end":
             if let msg = obj["message"] as? [String: Any] {
                 let role = msg["role"] as? String ?? "assistant"
@@ -200,7 +215,7 @@ final class PiAgentClient: NSObject {
                 onEvent?(.messageEnd(role: role, blocks: blocks))
             }
 
-        case "agent_settled": onEvent?(.settled)
+        case "agent_settled": onEvent?(.settled(aborted: obj["aborted"] as? Bool ?? false))
         case "agent_end": onEvent?(.agentEnd)
 
         case "bash_execution_update":
@@ -212,18 +227,29 @@ final class PiAgentClient: NSObject {
 
         case "response":
             let command = obj["command"] as? String ?? ""
+            let id = obj["id"] as? String ?? ""
             let success = obj["success"] as? Bool ?? false
             let data = obj["data"] as? [String: Any] ?? [:]
             // get_messages returns a batch of historical messages; parse into turns.
-            if command == "get_messages", let msgs = data["messages"] as? [[String: Any]] {
+            if command == "get_messages", success, let msgs = data["messages"] as? [[String: Any]] {
                 let parsed = msgs.compactMap { m -> HistoryMessage? in
                     guard let role = m["role"] as? String else { return nil }
                     let ts = (m["timestamp"] as? Double) ?? (m["timestamp"] as? Int).map { Double($0) } ?? 0
-                    return HistoryMessage(role: role, blocks: parseBlocks(m["content"]), timestamp: ts)
+                    var blocks = parseBlocks(m["content"])
+                    // bashExecution (user-run `!cmd`) has no content array.
+                    if role == "bashExecution" {
+                        let cmd = m["command"] as? String ?? ""
+                        let out = m["output"] as? String ?? ""
+                        blocks = [.text("$ \(cmd)\n\(out)")]
+                    }
+                    return HistoryMessage(role: role, blocks: blocks, timestamp: ts,
+                                          toolName: m["toolName"] as? String,
+                                          isError: m["isError"] as? Bool ?? false)
                 }
-                onEvent?(.history(parsed))
+                onEvent?(.history(id: id, messages: parsed))
             } else {
-                onEvent?(.response(command: command, success: success, data: data))
+                onEvent?(.response(command: command, id: id, success: success,
+                                   error: obj["error"] as? String, data: data))
             }
 
         case "bridge_error":
