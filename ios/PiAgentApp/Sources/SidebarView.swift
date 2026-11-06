@@ -104,9 +104,9 @@ struct SidebarView: View {
         .onChange(of: model.sessions.count) { _, _ in /* refresh on new sessions */ }
     }
 
-    // Filtered session list (improvement #4).
+    // Filtered session list (improvement #4) + local cache fallback (improvement #15).
     private var filteredSessions: [SessionInfo] {
-        let all = model.sessions
+        let all = model.cachedSessions.isEmpty ? model.sessions : model.cachedSessions
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return all }
         return all.filter {

@@ -47,9 +47,11 @@ final class ChatModel: ObservableObject {
     @Published var currentModel = ""
     @Published var availableModels: [ModelOption] = []
     @Published var showThinking = false
+    @Published var lastAssistantText: String? = nil   // improvement #14: last assistant response
 
     // Phase 1
     @Published var sessions: [SessionInfo] = []
+    @Published var cachedSessions: [SessionInfo] = []   // improvement #15: local cache
     @Published var sessionName = ""
 
     // Phase 2
@@ -322,6 +324,8 @@ final class ChatModel: ObservableObject {
                 parseModels(data)
             case "list_sessions":
                 parseSessions(data)
+                // improvement #15: cache the session list locally
+                cachedSessions = sessions
             case "switch_session":
                 // After switching, reload the new session's history.
                 pendingHistoryLoad = true
@@ -350,6 +354,8 @@ final class ChatModel: ObservableObject {
                                           source: (d["source"] as? String) ?? "")
                     }
                 }
+            case "get_last_assistant_text":   // improvement #14
+                if let t = data["text"] as? String { lastAssistantText = t }
             case "get_fork_messages":   // step 4
                 if let msgs = data["messages"] as? [[String: Any]] {
                     forkMessages = msgs.compactMap { d in
@@ -367,6 +373,8 @@ final class ChatModel: ObservableObject {
             case "get_session_stats":
                 if let cu = data["contextUsage"] as? [String: Any], let pct = cu["percent"] as? Int {
                     contextPercent = pct
+                    // improvement #11: auto-compact when context usage exceeds 70%
+                    if pct > 70 { doCompact() }
                 }
             default:
                 break

@@ -16,6 +16,7 @@ struct ChatView: View {
     @State private var showFork = false       // step 4
     @State private var showCommands = false   // step 5
     @State private var showBash = false       // step 6
+    @State private var showLastResponse = false // improvement #14
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,6 +48,9 @@ struct ChatView: View {
         .sheet(isPresented: $showFork) { ForkSheet(model: model) }      // step 4
         .sheet(isPresented: $showCommands) { CommandsSheet(model: model) } // step 5
         .sheet(isPresented: $showBash) { BashPanel(model: model) }        // step 6
+        .sheet(isPresented: $showLastResponse) {
+            LastResponseView(text: model.lastAssistantText ?? "")
+        }
     }
 
     @ToolbarContentBuilder
@@ -75,6 +79,23 @@ struct ChatView: View {
             if !model.turns.isEmpty {
                 Button { model.clearConversation() } label: { Image(systemName: "trash") }
                     .disabled(model.running)
+            }
+
+            // improvement #18: copy full conversation to clipboard
+            if !model.turns.isEmpty {
+                Button {
+                    var all = ""
+                    for t in model.turns {
+                        let txt = t.text
+                        if !txt.isEmpty { all += (all.isEmpty ? "" : "\n\n") + txt }
+                    }
+                    UIPasteboard.general.string = all
+                } label: { Image(systemName: "doc.on.doc") }
+            }
+
+            // improvement #14: show last assistant response
+            if model.lastAssistantText != nil {
+                Button { showLastResponse = true } label: { Image(systemName: "doc.text") }
             }
 
             // Phase 1 + step 4: sessions & fork

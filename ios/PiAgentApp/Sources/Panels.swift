@@ -14,6 +14,13 @@ struct DiffView: View {
                 Text("−\(remove)").foregroundStyle(.red)
                 Spacer()
                 Text("unified diff").font(.caption2).foregroundStyle(.secondary)
+                // improvement #12: copy diff to clipboard
+                Button {
+                    UIPasteboard.general.string = diff
+                } label: {
+                    Image(systemName: "doc.on.doc").font(.caption2)
+                }
+                .buttonStyle(.plain)
             }
             .padding(6)
             .background(Color.gray.opacity(0.1))
@@ -187,6 +194,28 @@ struct SessionListView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Last response viewer (improvement #14)
+
+struct LastResponseView: View {
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 14, design: .default))
+                    .padding()
+            }
+            .navigationTitle("Last response")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
     }
