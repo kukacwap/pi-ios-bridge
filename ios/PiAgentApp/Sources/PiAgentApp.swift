@@ -18,25 +18,21 @@ struct RootView: View {
     @State private var showSettings = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var hSize
-    @Environment(\.verticalSizeClass) private var vSize
 
     init() {
         // ChatModel needs settings; construct a throwaway here and rebind in onAppear.
         _model = StateObject(wrappedValue: ChatModel(settings: AppSettings()))
     }
 
-    /// iPad / large Mac window → split view (sidebar + detail).
-    /// iPhone (compact width, any orientation) → single-column stack.
+    /// iPad / Mac window with regular width → split view (sidebar + detail).
+    /// iPhone → always the single-column stack, in every orientation.
     ///
-    /// The split view is the "regular" width layout; iPhone keeps a compact width
-    /// even in landscape, so a regular width is a reliable signal that we are on an
-    /// iPad / large Mac window — never on an iPhone. Keying off both the horizontal
-    /// and vertical size class keeps the choice stable and never leaks the wide
-    /// split-view layout into the iPhone app (e.g. while switching sessions).
+    /// Size classes alone are not enough: a Plus/Max iPhone in landscape reports
+    /// a *regular* width (with compact height), so a size-class-only check put
+    /// the wide split view on the phone and rebuilt the whole hierarchy on every
+    /// rotation. The device idiom is fixed for the app's lifetime.
     private var usesSplitView: Bool {
-        if hSize == .regular && vSize == .regular { return true }  // iPad landscape / Mac
-        if hSize == .regular && vSize == .compact { return true }  // iPad portrait
-        return false                                               // iPhone
+        UIDevice.current.userInterfaceIdiom != .phone && hSize == .regular
     }
 
     var body: some View {
@@ -51,6 +47,10 @@ struct RootView: View {
                 } detail: {
                     chatDetail
                 }
+                // Side-by-side in both orientations: in iPad portrait the default
+                // style overlays the sidebar, and it stayed over the chat after
+                // picking a session (the switch looked like it did nothing).
+                .navigationSplitViewStyle(.balanced)
             } else {
                 // iPhone (compact): single-column stack with sheets.
                 NavigationStack {
