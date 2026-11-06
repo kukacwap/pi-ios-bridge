@@ -13,6 +13,7 @@ final class ChatModel: ObservableObject {
         var streaming: Bool = false
         var tools: [String] = []          // tool names used in this turn
         var toolError: String? = nil      // issue #2: inline error note (not an artifact)
+        var timestamp: Date = Date()      // when this turn was created/answered
 
         var text: String {
             blocks.compactMap { block in
@@ -25,6 +26,9 @@ final class ChatModel: ObservableObject {
                 if case .thinking(let t) = block { return t }
                 return nil
             }.joined()
+        }
+        var timestampLabel: String {
+            timestamp.formatted(.dateTime.hour().minute())
         }
     }
 
@@ -107,6 +111,16 @@ final class ChatModel: ObservableObject {
         turns.append(Turn(role: .assistant, streaming: true))
         running = true
         client?.prompt(t)
+    }
+
+    // Regenerate: re-send the last user message (replaces the assistant response).
+    func regenerate() {
+        guard let lastUserIdx = (0..<turns.count).last(where: { turns[$0].role == .user }) else { return }
+        let text = turns[lastUserIdx].text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        // Drop the user turn + assistant response, then re-run the same prompt.
+        turns.removeSubrange(lastUserIdx...turns.count - 1)
+        send(text)
     }
 
     func steer(_ text: String) {
@@ -268,6 +282,7 @@ final class ChatModel: ObservableObject {
                 let role: Turn.Role = (m.role == "user") ? .user : .assistant
                 var t = Turn(role: role, blocks: m.blocks)
                 t.streaming = false
+                t.timestamp = Date(timeIntervalSince1970: m.timestamp / 1000.0)
                 // Collect tool names for the badge row.
                 for b in m.blocks {
                     if case .toolCall(_, let name, _) = b, !t.tools.contains(name) { t.tools.append(name) }

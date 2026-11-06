@@ -65,6 +65,12 @@ struct ChatView: View {
             // Steps 1–3: controls (name, thinking level, compact)
             Button { showControls = true } label: { Image(systemName: "slider.horizontal.3") }
 
+            // Regenerate last response (improvement #1)
+            if !model.turns.isEmpty {
+                Button { model.regenerate() } label: { Image(systemName: "arrow.triangle.2.circlepath") }
+                    .disabled(model.running)
+            }
+
             // Phase 1 + step 4: sessions & fork
             Menu {
                 Button("Browse sessions", systemImage: "folder") { showSessions = true }
@@ -165,10 +171,15 @@ struct TurnView: View {
         case .user:
             HStack {
                 Spacer(minLength: 40)
-                Text(turn.text)
-                    .padding(10)
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(turn.text)
+                        .padding(10)
+                        .background(Color.accentColor.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Text(turn.timestampLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
@@ -187,8 +198,23 @@ struct TurnView: View {
                     }
                 }
                 if !turn.text.isEmpty {
-                    Text(turn.text).textSelection(.enabled)
+                    Text(turn.text)
+                        .textSelection(.enabled)
+                    // improvement #2: copy response (via UIPasteboard — reliable across OS versions)
+                    Button {
+                        UIPasteboard.general.string = turn.text
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 4)
                 }
+                // improvement #3: timestamp
+                Text(turn.timestampLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 // Issue #2: inline error note instead of an artifact panel entry.
                 if let err = turn.toolError {
                     HStack(alignment: .top, spacing: 6) {
