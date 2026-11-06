@@ -6,9 +6,21 @@ struct SidebarView: View {
     @EnvironmentObject var settings: AppSettings
     var onOpenSettings: () -> Void
     var onNewSession: () -> Void
+    @State private var searchText = ""
 
     var body: some View {
         List {
+            // Session search (improvement #4)
+            Section {
+                TextField("Search sessions…", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .searchSuggestions {
+                        ForEach(filteredSessions, id: \.id) { s in
+                            Text(s.name).foregroundStyle(.secondary)
+                        }
+                    }
+            }
+
             // Connection status
             Section {
                 HStack(spacing: 8) {
@@ -55,11 +67,11 @@ struct SidebarView: View {
             }
 
             // Sessions
-            Section("Sessions (\(model.sessions.count))") {
-                if model.sessions.isEmpty {
-                    Text("No sessions yet").font(.caption).foregroundStyle(.secondary)
+            Section("Sessions (\(filteredSessions.count))/\(model.sessions.count))") {
+                if filteredSessions.isEmpty {
+                    Text("No sessions found").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.sessions) { s in
+                    ForEach(filteredSessions) { s in
                         Button {
                             model.openSession(s)
                         } label: {
@@ -82,5 +94,15 @@ struct SidebarView: View {
         .navigationTitle("Pi (local)")
         .onAppear { model.browseSessions() }
         .onChange(of: model.sessions.count) { _, _ in /* refresh on new sessions */ }
+    }
+
+    // Filtered session list (improvement #4).
+    private var filteredSessions: [SessionInfo] {
+        let all = model.sessions
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return all }
+        return all.filter {
+            $0.name.localizedCaseInsensitiveContains(q) || $0.preview.localizedCaseInsensitiveContains(q)
+        }
     }
 }

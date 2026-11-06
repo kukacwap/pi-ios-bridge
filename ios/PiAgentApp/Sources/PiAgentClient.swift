@@ -218,7 +218,8 @@ final class PiAgentClient: NSObject {
             if command == "get_messages", let msgs = data["messages"] as? [[String: Any]] {
                 let parsed = msgs.compactMap { m -> HistoryMessage? in
                     guard let role = m["role"] as? String else { return nil }
-                    return HistoryMessage(role: role, blocks: parseBlocks(m["content"]))
+                    let ts = (m["timestamp"] as? Double) ?? (m["timestamp"] as? Int).map { Double($0) } ?? 0
+                    return HistoryMessage(role: role, blocks: parseBlocks(m["content"]), timestamp: ts)
                 }
                 onEvent?(.history(parsed))
             } else {

@@ -13,6 +13,7 @@ enum MessageBlock {
 struct HistoryMessage {
     let role: String
     let blocks: [MessageBlock]
+    let timestamp: Double
 }
 
 // MARK: - Artifacts (Claude-style rendered panels)
