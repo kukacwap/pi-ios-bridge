@@ -11,9 +11,11 @@ enum MessageBlock {
 
 /// A parsed historical message (role + content blocks), delivered from get_messages.
 struct HistoryMessage {
-    let role: String
+    let role: String              // user | assistant | toolResult | bashExecution | system | …
     let blocks: [MessageBlock]
     let timestamp: Double
+    var toolName: String? = nil   // toolResult only
+    var isError: Bool = false     // toolResult only
 }
 
 // MARK: - Artifacts (Claude-style rendered panels)

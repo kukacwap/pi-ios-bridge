@@ -53,6 +53,8 @@ final class ChatModel: ObservableObject {
     @Published var sessions: [SessionInfo] = []
     @Published var cachedSessions: [SessionInfo] = []   // improvement #15: local cache
     @Published var sessionName = ""
+    @Published var currentSessionPath: String? = nil     // from get_state.sessionFile
+    @Published var switchingSession = false
 
     // Phase 2
     @Published var artifacts: [Artifact] = []
@@ -74,10 +76,23 @@ final class ChatModel: ObservableObject {
 
     private var client: PiAgentClient?
     private var settings: AppSettings
-    /// Only apply a get_messages batch to the transcript when we explicitly
-    /// requested it (connect / switch / new). Stray or broadcast .history events
-    /// must NOT clobber a live conversation.
-    private var pendingHistoryLoad = false
+    /// Only apply a get_messages batch whose request id is the one we are
+    /// waiting for. A plain Bool flag was not enough: it stayed armed when a
+    /// load was skipped and then let an unrelated batch clobber the transcript.
+    private var historyRequestId: String?
+    private var stateRequestId: String?
+    private var statsRequestIds: Set<String> = []
+    private var promptRequestIds: Set<String> = []
+    /// Request id of our own pending session change (switch/new/fork/clone).
+    /// While set, streaming events belong to the session we are leaving — pi
+    /// aborts the old run and flushes a partial message_end before it answers.
+    private var sessionChangeRequestId: String?
+    /// Index in the current assistant turn's blocks where the in-flight
+    /// assistant message begins. A run with tools emits several assistant
+    /// messages; each message_end replaces only its own part.
+    private var stepBase = 0
+    /// Auto-compact at most once per session.
+    private var autoCompactedPath: String?
 
     init(settings: AppSettings) { self.settings = settings }
 
@@ -114,8 +129,9 @@ final class ChatModel: ObservableObject {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         turns.append(Turn(role: .user, blocks: [.text(t)]))
         turns.append(Turn(role: .assistant, streaming: true))
+        stepBase = 0
         running = true
-        client?.prompt(t)
+        if let id = client?.prompt(t) { promptRequestIds.insert(id) }
     }
 
     // Regenerate: re-send the last user message (replaces the assistant response).
@@ -129,11 +145,7 @@ final class ChatModel: ObservableObject {
     }
 
     // Clear conversation / restart session (improvement #5).
-    func clearConversation() {
-        client?.newSession()
-        turns.removeAll()
-        artifacts.removeAll()
-    }
+    func clearConversation() { newSession() }
 
     func steer(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -145,28 +157,67 @@ final class ChatModel: ObservableObject {
 
     // Phase 1
     func newSession() {
-        pendingHistoryLoad = true
-        client?.newSession()
-        turns.removeAll()
-        artifacts.removeAll()
+        guard let c = client, connected else { return }
+        beginSessionChange()
+        sessionChangeRequestId = c.newSession()
+        statusLine = "new session…"
     }
     func browseSessions() { client?.listSessions() }
     func openSession(_ s: SessionInfo) {
-        turns.removeAll()
-        pendingHistoryLoad = true   // ensure history reloads after switching
-        client?.switchSession(s.path)
-        statusLine = "loading \(s.name)…"
+        guard let c = client, connected else { return }
+        guard s.path != currentSessionPath || switchingSession else { return }
+        beginSessionChange()
+        sessionName = displayName(for: s)
+        currentSessionPath = s.path
+        sessionChangeRequestId = c.switchSession(s.path)
+        statusLine = "loading \(sessionName.isEmpty ? "session" : sessionName)…"
     }
     func forkLastUser() {
         // Fork from the most recent user turn's entry — we don't track entry ids
         // here, so use clone as a safe fallback for "branch from now".
-        client?.clone()
+        guard let c = client, connected else { return }
+        beginSessionChange()
+        sessionChangeRequestId = c.clone()
+    }
+
+    /// Reset everything that belongs to the session we are leaving.
+    private func beginSessionChange() {
+        switchingSession = true
+        turns.removeAll()
+        artifacts.removeAll()
+        activeArtifact = nil
+        forkMessages.removeAll()
+        lastAssistantText = nil
+        contextPercent = nil
+        sessionName = ""
+        historyRequestId = nil
+        stepBase = 0
+        // pi aborts a running agent when the session changes.
+        running = false
+    }
+
+    /// After any session change (ours or another attached client's), reload
+    /// everything that is per-session.
+    private func resyncSession() {
+        guard let c = client else { return }
+        historyRequestId = c.getMessages()
+        stateRequestId = c.getState()
+        statsRequestIds.insert(c.getStats())
+        c.listSessions()
+    }
+
+    private func displayName(for s: SessionInfo) -> String {
+        // The bridge falls back to the file name when a session has no name.
+        let file = (s.path as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
+        return s.name == file ? "" : s.name
     }
 
     // Step 4: per-message fork
     func loadForkMessages() { client?.getForkMessages() }
     func fork(from msg: ForkMessage) {
-        client?.fork(entryId: msg.entryId)
+        guard let c = client, connected else { return }
+        beginSessionChange()
+        sessionChangeRequestId = c.fork(entryId: msg.entryId)
         statusLine = "forked from: \(msg.text.prefix(40))…"
     }
 
@@ -208,7 +259,7 @@ final class ChatModel: ObservableObject {
         currentThinkingLevel = level
         client?.setThinkingLevel(level)
     }
-    func refreshStats() { client?.getStats() }
+    func refreshStats() { if let id = client?.getStats() { statsRequestIds.insert(id) } }
     func doCompact() { client?.compact(); statusLine = "compacting…" }
 
     // MARK: - Event handling
@@ -219,17 +270,23 @@ final class ChatModel: ObservableObject {
     }
 
     private func handle(_ ev: PiAgentClient.Event) {
+        // While our own session change is pending, streaming events still
+        // belong to the session we are leaving: drop them.
+        if sessionChangeRequestId != nil {
+            switch ev {
+            case .textDelta, .thinkingDelta, .toolStart, .toolEnd, .image, .messageStart, .messageEnd:
+                return
+            default: break
+            }
+        }
         switch ev {
         case .ready(let model, let provider, _, _):
             connected = true
             currentModel = model
             statusLine = "connected · \(provider)/\(model)"
-            pendingHistoryLoad = true          // we explicitly want history now
-            client?.getMessages()      // load history (phase 1)
-            client?.listSessions()     // populate session browser
+            resyncSession()            // history, state, stats, session list
             client?.getAvailableModels()
             client?.getAvailableThinkingLevels()   // step 2
-            client?.getStats()                    // step 3
             client?.getCommands()                 // step 5: skills/templates
 
         case .textDelta(let d):
@@ -263,6 +320,16 @@ final class ChatModel: ObservableObject {
         case .image(let data, let mimeType):
             artifacts.append(Artifact(kind: .image, title: "image", content: "", imageData: data, mimeType: mimeType))
 
+        case .messageStart(let role):
+            guard role == "assistant" else { break }
+            // A run we didn't start here (another attached device): give it its
+            // own bubble instead of appending to the previous answer.
+            if !(turns.last?.role == .assistant && turns.last?.streaming == true) {
+                turns.append(Turn(role: .assistant, streaming: true))
+                running = true
+            }
+            if let i = assistantIndex { stepBase = turns[i].blocks.count }
+
         case .messageEnd(let role, let blocks):
             // Replace the streaming assistant turn with the authoritative one.
             // NOTE: user turns are appended by `send` (live) or by the `.history`
@@ -270,8 +337,14 @@ final class ChatModel: ObservableObject {
             // otherwise every prompt duplicates the user message.
             if role == "assistant" {
                 if let i = assistantIndex {
-                    turns[i].blocks = blocks
-                    turns[i].streaming = false
+                    // Replace only this step's streamed blocks; keep earlier
+                    // steps of the same run (thinking/tool calls before a tool result).
+                    let base = min(stepBase, turns[i].blocks.count)
+                    turns[i].blocks = Array(turns[i].blocks[..<base]) + blocks
+                    stepBase = turns[i].blocks.count
+                    for b in blocks {
+                        if case .toolCall(_, let name, _) = b, !turns[i].tools.contains(name) { turns[i].tools.append(name) }
+                    }
                 } else {
                     turns.append(Turn(role: .assistant, blocks: blocks))
                 }
@@ -284,32 +357,67 @@ final class ChatModel: ObservableObject {
             }
             // (user turns are handled by send() / .history — no append here)
 
-        case .history(let messages):
-            // Issue #1: only replace the transcript when we explicitly asked for
-            // history AND nothing is actively streaming. Otherwise a stray or
-            // broadcast get_messages would wipe a live conversation.
-            guard pendingHistoryLoad, !running else { return }
-            pendingHistoryLoad = false
+        case .history(let id, let messages):
+            // Only the batch we asked for most recently; ignore other clients'
+            // and superseded requests (e.g. after a quick second switch).
+            guard id == historyRequestId else { return }
+            historyRequestId = nil
             var newTurns: [Turn] = []
             for m in messages {
-                guard !m.blocks.isEmpty else { continue }
-                if m.role == "system" { continue }   // skip system preamble
-                let role: Turn.Role = (m.role == "user") ? .user : .assistant
-                var t = Turn(role: role, blocks: m.blocks)
-                t.streaming = false
-                t.timestamp = Date(timeIntervalSince1970: m.timestamp / 1000.0)
-                // Collect tool names for the badge row.
-                for b in m.blocks {
-                    if case .toolCall(_, let name, _) = b, !t.tools.contains(name) { t.tools.append(name) }
+                switch m.role {
+                case "system":
+                    continue                                   // preamble
+                case "user":
+                    guard !m.blocks.isEmpty else { continue }
+                    var t = Turn(role: .user, blocks: m.blocks)
+                    t.timestamp = Date(timeIntervalSince1970: m.timestamp / 1000.0)
+                    newTurns.append(t)
+                default:
+                    // assistant / toolResult / bashExecution / custom: fold into one
+                    // assistant turn per user prompt, exactly like the live view.
+                    // Tool results are NOT assistant text — they only mark errors.
+                    if newTurns.last?.role != .assistant {
+                        newTurns.append(Turn(role: .assistant))
+                    }
+                    let i = newTurns.count - 1
+                    newTurns[i].timestamp = Date(timeIntervalSince1970: m.timestamp / 1000.0)
+                    if m.role == "toolResult" {
+                        if m.isError {
+                            let text = m.blocks.compactMap { b -> String? in
+                                if case .text(let t) = b { return t }; return nil
+                            }.joined()
+                            newTurns[i].toolError = "\(m.toolName ?? "tool"): \(text.prefix(300))"
+                        }
+                        continue
+                    }
+                    if m.role == "bashExecution", !newTurns[i].tools.contains("bash") {
+                        newTurns[i].tools.append("bash")
+                    }
+                    newTurns[i].blocks.append(contentsOf: m.blocks)
+                    for b in m.blocks {
+                        if case .toolCall(_, let name, _) = b, !newTurns[i].tools.contains(name) {
+                            newTurns[i].tools.append(name)
+                        }
+                    }
                 }
-                newTurns.append(t)
+            }
+            // A run is still streaming (started on another device): keep a live
+            // bubble at the end so new deltas don't land in an old answer.
+            if running {
+                newTurns.append(Turn(role: .assistant, streaming: true))
+                stepBase = 0
             }
             turns = newTurns
+            switchingSession = false
+            if statusLine.hasPrefix("loading") || statusLine.hasPrefix("new session") || statusLine.hasPrefix("forked") {
+                statusLine = "connected"
+            }
 
         case .settled:
             running = false
             if let i = assistantIndex { turns[i].streaming = false }
-            client?.getStats()   // refresh context gauge after each run
+            refreshStats()          // refresh context gauge after each run
+            client?.listSessions()  // first prompt creates the session file; mtime changes
 
         case .agentEnd:
             break
@@ -321,7 +429,30 @@ final class ChatModel: ObservableObject {
         case .extensionUI(let d):
             dialog = d          // present as a sheet (phase 3)
 
-        case .response(let command, let success, let data):
+        case .response(let command, let id, let success, let error, let data):
+            if ["switch_session", "new_session", "fork", "clone"].contains(command) {
+                let ours = (id == sessionChangeRequestId)
+                if ours { sessionChangeRequestId = nil }
+                if !success {
+                    statusLine = "error: \(command) failed\(error.map { ": \($0)" } ?? "")"
+                } else if data["cancelled"] as? Bool == true {
+                    statusLine = "\(command) cancelled"
+                } else if !ours {
+                    // Another device changed the shared session: follow it.
+                    beginSessionChange()
+                }
+                // Always reload — on failure this restores the old session's view.
+                resyncSession()
+                return
+            }
+            if command == "prompt", promptRequestIds.remove(id) != nil, !success {
+                running = false
+                if let i = assistantIndex, turns[i].streaming {
+                    turns[i].streaming = false
+                    turns[i].toolError = "prompt failed: \(error ?? "unknown error")"
+                }
+                return
+            }
             switch command {
             case "get_available_models":
                 parseModels(data)
@@ -329,14 +460,10 @@ final class ChatModel: ObservableObject {
                 parseSessions(data)
                 // improvement #15: cache the session list locally
                 cachedSessions = sessions
-            case "switch_session":
-                // After switching, reload the new session's history.
-                pendingHistoryLoad = true
-                client?.getMessages()
-            case "new_session":
-                turns.removeAll(); artifacts.removeAll()
-                pendingHistoryLoad = true
-                client?.getMessages()
+            case "get_state":
+                guard id == stateRequestId else { break }
+                stateRequestId = nil
+                applyState(data)
             case "diff":
                 if let out = data["output"] as? String, !out.isEmpty {
                     artifacts.append(Artifact(kind: .diff, title: "git diff", content: out))
@@ -374,6 +501,8 @@ final class ChatModel: ObservableObject {
             case "get_available_thinking_levels":
                 if let levels = data["levels"] as? [String] { thinkingLevels = levels }
             case "get_session_stats":
+                // Stats responses can belong to another client; only act on ours.
+                guard statsRequestIds.remove(id) != nil else { break }
                 if let cu = data["contextUsage"] as? [String: Any], let rawPct = cu["percent"] {
                     var pct: Int? = nil
                     if let i = rawPct as? Int { pct = i }
@@ -381,7 +510,12 @@ final class ChatModel: ObservableObject {
                     if let pct = pct {
                         contextPercent = pct
                         // improvement #11: auto-compact when context usage exceeds 70%
-                        if pct > 70 { doCompact() }
+                        // Once per session, and never mid-run / mid-switch.
+                        if pct > 70, !running, sessionChangeRequestId == nil,
+                           let path = currentSessionPath, autoCompactedPath != path {
+                            autoCompactedPath = path
+                            doCompact()
+                        }
                     }
                 }
             default:
@@ -399,6 +533,30 @@ final class ChatModel: ObservableObject {
             // thinking_level_changed arrives as a raw event.
             if obj["type"] as? String == "thinking_level_changed", let level = obj["level"] as? String {
                 currentThinkingLevel = level
+            }
+        }
+    }
+
+    private func applyState(_ data: [String: Any]) {
+        if let file = data["sessionFile"] as? String { currentSessionPath = file }
+        if let name = data["sessionName"] as? String, !name.isEmpty {
+            sessionName = name
+        } else if let path = currentSessionPath,
+                  let s = sessions.first(where: { $0.path == path }) {
+            sessionName = displayName(for: s)
+        }
+        if let level = data["thinkingLevel"] as? String { currentThinkingLevel = level }
+        if let m = data["model"] as? [String: Any] {
+            currentModel = (m["name"] as? String) ?? (m["id"] as? String) ?? currentModel
+        }
+        // Only pick up a run that is already going (e.g. started on another
+        // device). Never clear `running` here: a prompt we sent after this
+        // get_state may not have started yet — agent_settled ends runs.
+        if data["isStreaming"] as? Bool == true, !running {
+            running = true
+            if !(turns.last?.role == .assistant && turns.last?.streaming == true) {
+                turns.append(Turn(role: .assistant, streaming: true))
+                stepBase = 0
             }
         }
     }
@@ -432,6 +590,11 @@ final class ChatModel: ObservableObject {
                 mtime: (d["mtime"] as? Double) ?? 0,
                 preview: (d["preview"] as? String) ?? ""
             )
+        }
+        // The list may arrive after get_state: fill in the current name now.
+        if sessionName.isEmpty, let path = currentSessionPath,
+           let s = sessions.first(where: { $0.path == path }) {
+            sessionName = displayName(for: s)
         }
     }
 }

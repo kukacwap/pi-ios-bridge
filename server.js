@@ -129,12 +129,36 @@ function spawnPi() {
   child.stdout.on("data", createLineSplitter((line) => {
     let record;
     try { record = JSON.parse(line); } catch { log("non-JSON stdout:", line.slice(0, 200)); return; }
-    // Track the current session file from get_state responses so name changes
-    // can be recorded into the sidecar.
-    if (record.type === "response" && record.command === "get_state" && record.success) {
-      const f = record.data?.sessionFile;
-      if (f) currentSessionFile = f;
+
+    if (record.type === "response") {
+      // Bridge-internal requests (session tracking): never shown to clients.
+      if (typeof record.id === "string" && record.id.startsWith(INTERNAL_PREFIX)) {
+        if (record.command === "get_state" && record.success) {
+          currentSessionFile = record.data?.sessionFile || null;
+        }
+        return;
+      }
+      // Restore the client's own id and find out who asked.
+      const route = typeof record.id === "string" ? pending.get(record.id) : undefined;
+      if (route) { pending.delete(record.id); record.id = route.origId; }
+
+      // A session-changing command finished: learn the new session file and
+      // release commands that were held back behind it.
+      if (SESSION_CHANGING.has(record.command)) {
+        writeRaw({ type: "get_state", id: INTERNAL_PREFIX + "state-" + randomUUID().slice(0, 8) });
+        releaseBarrier();
+      }
+
+      // Responses go back to the requesting client only, except for commands
+      // that change shared state — every attached client must resync on those.
+      if (route && !BROADCAST_RESPONSES.has(record.command)) {
+        if (route.ws.readyState === route.ws.OPEN) route.ws.send(JSON.stringify(record));
+        return;
+      }
+      broadcast(record);
+      return;
     }
+
     // Track session name changes into the sidecar.
     if (record.type === "session_info_changed" && currentSessionFile) {
       const name = record.name;
@@ -148,6 +172,8 @@ function spawnPi() {
     log(`shared pi exited code=${code} signal=${signal}`);
     broadcast({ type: "bridge_notice", event: "pi_exited", code, signal });
     child = null;
+    pending.clear();
+    releaseBarrier();
   });
   child.on("error", (err) => {
     log("spawn error:", err.message);
@@ -162,10 +188,48 @@ function broadcast(obj) {
   const s = JSON.stringify(obj);
   for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(s);
 }
-function writeCommand(cmd) {
+function writeRaw(cmd) {
   if (!child) spawnPi();
   try { child.stdin.write(JSON.stringify(cmd) + "\n"); }
   catch (err) { broadcast({ type: "bridge_error", error: `write failed: ${err.message}` }); }
+}
+
+// --- Request routing + session-switch barrier -------------------------------
+// pi processes switch_session/new_session/fork/clone asynchronously: a command
+// written right after one of them (e.g. get_messages) can be answered with the
+// OLD session's data. So while a session-changing command is in flight, later
+// commands are held back and flushed once its response arrives.
+const INTERNAL_PREFIX = "__bridge:";
+const SESSION_CHANGING = new Set(["new_session", "switch_session", "fork", "clone"]);
+const BROADCAST_RESPONSES = new Set([
+  ...SESSION_CHANGING, "set_model", "cycle_model", "set_thinking_level",
+  "cycle_thinking_level", "set_session_name", "compact",
+]);
+const pending = new Map();       // bridge id -> { ws, origId }
+let barrier = null;              // { timer } while a session change is in flight
+const held = [];                 // commands queued behind the barrier
+
+function releaseBarrier() {
+  if (!barrier) return;
+  clearTimeout(barrier.timer);
+  barrier = null;
+  while (held.length && !barrier) dispatch(held.shift());
+}
+
+function dispatch(cmd) {
+  writeRaw(cmd);
+  if (SESSION_CHANGING.has(cmd.type)) {
+    barrier = { timer: setTimeout(() => { log("session barrier timed out"); releaseBarrier(); }, 30_000) };
+  }
+}
+
+/** Forward a client command to pi; its response is routed back to `ws`. */
+function writeCommand(cmd, ws, connId) {
+  const origId = cmd.id;
+  const bridgeId = `${connId}:${origId}`;
+  pending.set(bridgeId, { ws, origId });
+  const out = { ...cmd, id: bridgeId };
+  if (barrier) held.push(out); else dispatch(out);
 }
 
 // --- Strict JSONL reader ----------------------------------------------------
@@ -203,14 +267,14 @@ wss.on("connection", (ws, req) => {
   log(`[${connId}] attached from ${req.socket.remoteAddress} (clients=${clients.size})`);
 
   // Learn the current session file so name changes can be recorded.
-  writeCommand({ type: "get_state", id: "state-" + connId });
+  writeRaw({ type: "get_state", id: INTERNAL_PREFIX + "state-" + connId });
 
   ws.on("message", async (data) => {
     let msg;
     try { msg = JSON.parse(data.toString("utf8")); }
     catch { broadcast({ type: "bridge_error", error: "invalid JSON from client" }); return; }
     if (!msg || typeof msg.type !== "string") { broadcast({ type: "bridge_error", error: "missing command type" }); return; }
-    if (!msg.id) msg.id = randomUUID().slice(0, 8);
+    if (typeof msg.id !== "string" || !msg.id) msg.id = randomUUID().slice(0, 8);
 
     // Bridge-local commands (never forwarded to pi).
     switch (msg.type) {
@@ -226,11 +290,7 @@ wss.on("connection", (ws, req) => {
         return;
     }
 
-    // Track session file after session-changing commands.
-    if (msg.type === "switch_session" && msg.sessionPath) currentSessionFile = msg.sessionPath;
-    if (msg.type === "new_session") currentSessionFile = null;
-
-    if (EXT_UI_RESPONSE.has(msg.type)) { writeCommand(msg); return; }
+    if (EXT_UI_RESPONSE.has(msg.type)) { writeRaw(msg); return; }
 
     if (!ALLOWED_COMMANDS.has(msg.type)) {
       ws.send(JSON.stringify({ type: "bridge_error", id: msg.id, error: `command not allowed: ${msg.type}` })); return;
@@ -238,11 +298,12 @@ wss.on("connection", (ws, req) => {
     if (msg.type === "set_model" && !LOCAL_PROVIDERS.has(msg.provider)) {
       ws.send(JSON.stringify({ type: "bridge_error", id: msg.id, error: `provider not allowed: ${msg.provider}` })); return;
     }
-    writeCommand(msg);
+    writeCommand(msg, ws, connId);
   });
 
   ws.on("close", () => {
     clients.delete(ws);
+    for (const [k, v] of pending) if (v.ws === ws) pending.delete(k);
     log(`[${connId}] detached (clients=${clients.size})`);
     // NOTE: we do NOT kill the shared pi — other clients may still be attached.
   });

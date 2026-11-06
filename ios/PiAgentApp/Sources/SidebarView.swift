@@ -75,7 +75,7 @@ struct SidebarView: View {
             }
 
             // Sessions
-            Section("Sessions (\(filteredSessions.count))/\(model.sessions.count))") {
+            Section("Sessions (\(filteredSessions.count)/\(model.sessions.count))") {
                 if filteredSessions.isEmpty {
                     Text("No sessions found").font(.caption).foregroundStyle(.secondary)
                 } else {
@@ -85,6 +85,10 @@ struct SidebarView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
+                                    if s.path == model.currentSessionPath {
+                                        Image(systemName: model.switchingSession ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+                                            .foregroundStyle(Color.accentColor)
+                                    }
                                     Text(s.name).font(.subheadline.weight(.medium)).lineLimit(1)
                                     Spacer()
                                     Text(s.dateLabel).font(.caption2).foregroundStyle(.secondary)
@@ -94,6 +98,7 @@ struct SidebarView: View {
                                 }
                             }
                         }
+                        .listRowBackground(s.path == model.currentSessionPath ? Color.accentColor.opacity(0.12) : nil)
                     }
                 }
             }
